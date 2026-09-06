@@ -14,7 +14,10 @@ namespace Aether.Citadel
         Sand        = 4, // desert floor and drifts
         PlasterWarm = 5, // ochre render, sun-baked
         PlasterPale = 6, // bleached whitewash, flaking
-        MudBrick    = 7  // exposed adobe courses - poor quarters and ruins
+        MudBrick    = 7, // exposed adobe courses - poor quarters and ruins
+        Rune        = 8, // dark basalt carved with glowing sigils - palace floor
+        Lapis       = 9, // lapis panelling with gold trim - palace banners and regalia
+        CityFloor   = 10 // ancient flagstones and beaten earth - the streets of the town
     }
 
     /// <summary>
@@ -24,7 +27,7 @@ namespace Aether.Citadel
     /// </summary>
     public class MeshBuilder
     {
-        public const int MatCount = 8;
+        public const int MatCount = 11;
 
         readonly List<Vector3> _v = new List<Vector3>();
         readonly List<Vector3> _n = new List<Vector3>();

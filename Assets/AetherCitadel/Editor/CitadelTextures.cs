@@ -18,16 +18,30 @@ namespace Aether.Citadel
 
             mats[(int)Mat.StoneBlock]  = Make(texDir, matDir, "Stone", regenerate, 1024, StoneBlock, 0.10f, 0.7f);
             mats[(int)Mat.Plaster]     = Make(texDir, matDir, "Plaster", regenerate, 1024,
-                                              (sz, c, h) => RenderCoat(sz, c, h, SandLight, SandDark, 0.30f, 0.9f, 11), 0.06f);
+                                              (sz, c, h, e) => RenderCoat(sz, c, h, SandLight, SandDark, 0.30f, 0.9f, 11), 0.06f);
             mats[(int)Mat.Wood]        = Make(texDir, matDir, "Timber", regenerate, 256, Timber, 0.14f);
             mats[(int)Mat.RoofFlat]    = Make(texDir, matDir, "Roof", regenerate, 512, RoofDust, 0.04f);
-            // the ground tiles ~50x, so keep its relief soft or the repeat reads as a checkerboard
-            mats[(int)Mat.Sand]        = Make(texDir, matDir, "Sand", regenerate, 1024, Sand, 0.03f, 0.45f);
+            // The floor tiles every 8 m and repeats well over a hundred times across the
+            // dune field. Its base map therefore carries nothing finer than ~10 cm and
+            // no strong low frequencies either - fine detail would alias into speckle,
+            // coarse blotches would read as a grid. Close-up crispness comes from the
+            // shared detail map wired up below.
+            mats[(int)Mat.Sand]        = Make(texDir, matDir, "Sand", regenerate, 1024, Sand, 0.02f, 0.55f,
+                                              false, 1f, true);
+            mats[(int)Mat.CityFloor]   = Make(texDir, matDir, "CityFloor", regenerate, 1024, CityFloorTex, 0.07f, 0.8f,
+                                              false, 1f, true);
             mats[(int)Mat.PlasterWarm] = Make(texDir, matDir, "PlasterWarm", regenerate, 1024,
-                                              (sz, c, h) => RenderCoat(sz, c, h, OchreLight, OchreDark, 0.45f, 1.2f, 47), 0.05f);
+                                              (sz, c, h, e) => RenderCoat(sz, c, h, OchreLight, OchreDark, 0.45f, 1.2f, 47), 0.05f);
             mats[(int)Mat.PlasterPale] = Make(texDir, matDir, "PlasterPale", regenerate, 1024,
-                                              (sz, c, h) => RenderCoat(sz, c, h, PaleLight, PaleDark, 0.55f, 1.4f, 83), 0.07f);
+                                              (sz, c, h, e) => RenderCoat(sz, c, h, PaleLight, PaleDark, 0.55f, 1.4f, 83), 0.07f);
             mats[(int)Mat.MudBrick]    = Make(texDir, matDir, "MudBrick", regenerate, 512, MudBrick, 0.04f, 0.75f);
+            mats[(int)Mat.Rune]        = Make(texDir, matDir, "Rune", regenerate, 1024, RuneSigil, 0.30f, 1f, true, 2.4f);
+            mats[(int)Mat.Lapis]       = Make(texDir, matDir, "Lapis", regenerate, 512, LapisPanel, 0.42f, 0.9f);
+
+            // one grain sheet shared by both floor materials, tiled 6x inside each base
+            // tile so it lands at roughly 1.3 m and mips away to neutral in the distance
+            AttachGroundDetail(texDir, mats[(int)Mat.Sand], regenerate, 6f);
+            AttachGroundDetail(texDir, mats[(int)Mat.CityFloor], regenerate, 6f);
 
             AssetDatabase.SaveAssets();
             return mats;
@@ -37,30 +51,44 @@ namespace Aether.Citadel
         //  asset plumbing
         // ------------------------------------------------------------------
 
-        delegate void Painter(int size, Color[] albedo, float[] height);
+        delegate void Painter(int size, Color[] albedo, float[] height, Color[] emission);
 
         static Material Make(string texDir, string matDir, string name, bool regenerate, int size,
-                             Painter painter, float smoothness, float bumpScale = 1f)
+                             Painter painter, float smoothness, float bumpScale = 1f,
+                             bool emissive = false, float emissionStrength = 1f, bool ground = false)
         {
+            // the floor is seen at grazing angles across a hundred tile repeats, where
+            // bilinear mip banding and 8x aniso are exactly what read as pixellation
+            FilterMode filter = ground ? FilterMode.Trilinear : FilterMode.Bilinear;
+            int aniso = ground ? 16 : 8;
             string albedoPath = texDir + "/T_" + name + "_Albedo.png";
             string normalPath = texDir + "/T_" + name + "_Normal.png";
+            string emissPath = texDir + "/T_" + name + "_Emission.png";
             string matPath = matDir + "/M_Citadel_" + name + ".mat";
 
             if (regenerate || !File.Exists(albedoPath))
             {
                 var albedo = new Color[size * size];
                 var height = new float[size * size];
-                painter(size, albedo, height);
+                var emission = emissive ? new Color[size * size] : null;
+                painter(size, albedo, height, emission);
                 WritePng(albedoPath, size, albedo, false);
                 WritePng(normalPath, size, NormalFromHeight(size, height, 2.2f), true);
                 AssetDatabase.ImportAsset(albedoPath, ImportAssetOptions.ForceUpdate);
                 AssetDatabase.ImportAsset(normalPath, ImportAssetOptions.ForceUpdate);
-                Configure(albedoPath, false);
-                Configure(normalPath, true);
+                Configure(albedoPath, false, size, filter, aniso);
+                Configure(normalPath, true, size, filter, aniso);
+                if (emissive)
+                {
+                    WritePng(emissPath, size, emission, false);
+                    AssetDatabase.ImportAsset(emissPath, ImportAssetOptions.ForceUpdate);
+                    Configure(emissPath, false, size, filter, aniso);
+                }
             }
 
             var albedoTex = AssetDatabase.LoadAssetAtPath<Texture2D>(albedoPath);
             var normalTex = AssetDatabase.LoadAssetAtPath<Texture2D>(normalPath);
+            var emissTex = emissive ? AssetDatabase.LoadAssetAtPath<Texture2D>(emissPath) : null;
 
             var mat = AssetDatabase.LoadAssetAtPath<Material>(matPath);
             if (mat == null)
@@ -78,6 +106,17 @@ namespace Aether.Citadel
             if (mat.HasProperty("_Glossiness")) mat.SetFloat("_Glossiness", smoothness);
             if (mat.HasProperty("_Metallic")) mat.SetFloat("_Metallic", 0f);
             if (mat.HasProperty("_BumpScale")) mat.SetFloat("_BumpScale", bumpScale);
+
+            if (emissTex != null)
+            {
+                SetTex(mat, "_EmissionMap", emissTex);
+                mat.EnableKeyword("_EMISSION");
+                if (mat.HasProperty("_EmissionColor"))
+                    mat.SetColor("_EmissionColor", Color.white * emissionStrength);
+                // without this the bake ignores emission and the runes read as flat paint
+                mat.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
+            }
+
             EditorUtility.SetDirty(mat);
             return mat;
         }
@@ -103,17 +142,18 @@ namespace Aether.Citadel
             Object.DestroyImmediate(tex);
         }
 
-        static void Configure(string path, bool normalMap)
+        static void Configure(string path, bool normalMap, int maxSize = 1024,
+                              FilterMode filter = FilterMode.Bilinear, int aniso = 8)
         {
             var ti = AssetImporter.GetAtPath(path) as TextureImporter;
             if (ti == null) return;
             ti.textureType = normalMap ? TextureImporterType.NormalMap : TextureImporterType.Default;
             ti.sRGBTexture = !normalMap;
             ti.wrapMode = TextureWrapMode.Repeat;
-            ti.filterMode = FilterMode.Bilinear;
-            ti.anisoLevel = 8;
+            ti.filterMode = filter;
+            ti.anisoLevel = aniso;
             ti.mipmapEnabled = true;
-            ti.maxTextureSize = 1024;
+            ti.maxTextureSize = maxSize;
             ti.SaveAndReimport();
         }
 
@@ -246,8 +286,21 @@ namespace Aether.Citadel
         static readonly Color AdobeLight = new Color(0.769f, 0.525f, 0.310f);
         static readonly Color AdobeDark = new Color(0.529f, 0.337f, 0.184f);
 
+        // The floor palette is deliberately narrow. Dry sand varies by only a few per
+        // cent across a dune face, and a wide albedo range on a surface this heavily
+        // tiled is what turns the ground into tonal noise instead of sand.
+        static readonly Color SandSun = new Color(0.933f, 0.812f, 0.616f);    // lit crest
+        static readonly Color SandBase = new Color(0.855f, 0.702f, 0.494f);   // open sand
+        static readonly Color SandShade = new Color(0.729f, 0.573f, 0.396f);  // ripple trough
+        static readonly Color Gravel = new Color(0.549f, 0.478f, 0.388f);     // loose stones
+        static readonly Color FlagLight = new Color(0.855f, 0.753f, 0.588f);  // bleached slab
+        static readonly Color FlagDark = new Color(0.678f, 0.561f, 0.404f);
+        static readonly Color EarthPack = new Color(0.702f, 0.565f, 0.396f);  // beaten earth
+
+        const float Tau = Mathf.PI * 2f;
+
         /// <summary>Coursed ashlar: 4 courses per tile, offset every other row, with chipped arrises.</summary>
-        static void StoneBlock(int size, Color[] col, float[] hgt)
+        static void StoneBlock(int size, Color[] col, float[] hgt, Color[] em)
         {
             const int rows = 4, cols = 6;
             float rowH = 1f / rows, colW = 1f / cols;
@@ -372,7 +425,121 @@ namespace Aether.Citadel
             return c;
         }
 
-        static void MudBrick(int size, Color[] col, float[] hgt)
+        /// <summary>
+        /// Basalt slab carved with a circular sigil. Not a tiling pattern - it is mapped
+        /// once across the arena floor disc, so the design is centred in the texture.
+        /// </summary>
+        static void RuneSigil(int size, Color[] col, float[] hgt, Color[] em)
+        {
+            Color stone = new Color(0.208f, 0.176f, 0.161f);
+            Color stoneLit = new Color(0.310f, 0.259f, 0.227f);
+            Color glowCore = new Color(1f, 0.647f, 0.243f);
+            Color glowRim = new Color(0.984f, 0.361f, 0.106f);
+
+            for (int y = 0; y < size; y++)
+                for (int x = 0; x < size; x++)
+                {
+                    float u = (x + 0.5f) / size, v = (y + 0.5f) / size;
+                    float dx = u - 0.5f, dy = v - 0.5f;
+                    float r = Mathf.Sqrt(dx * dx + dy * dy) * 2f;   // 0 at centre, 1 at edge
+                    float ang = Mathf.Atan2(dy, dx);
+
+                    float grain = Fbm(u, v, 26, 4, 205);
+                    Color c = Lerp(stone, stoneLit, grain * 0.7f + 0.15f);
+                    float h = grain * 0.25f;
+                    float glow = 0f;
+
+                    // concentric bands
+                    glow = Mathf.Max(glow, Band(r, 0.94f, 0.016f));
+                    glow = Mathf.Max(glow, Band(r, 0.88f, 0.008f));
+                    glow = Mathf.Max(glow, Band(r, 0.62f, 0.012f));
+                    glow = Mathf.Max(glow, Band(r, 0.57f, 0.006f));
+                    glow = Mathf.Max(glow, Band(r, 0.24f, 0.010f));
+
+                    // radial spokes between the outer rings
+                    if (r > 0.62f && r < 0.88f)
+                    {
+                        float spoke = Mathf.Abs(Mathf.Sin(ang * 12f));
+                        glow = Mathf.Max(glow, Mathf.Clamp01((spoke - 0.985f) * 120f));
+                    }
+
+                    // glyph blocks around the outer band
+                    if (r > 0.885f && r < 0.938f)
+                    {
+                        int slot = Mathf.FloorToInt((ang + Mathf.PI) / (Mathf.PI * 2f) * 48f);
+                        float local = (ang + Mathf.PI) / (Mathf.PI * 2f) * 48f - slot;
+                        float bit = Hash(slot, Mathf.FloorToInt((r - 0.885f) * 90f), 17);
+                        if (bit > 0.45f && local > 0.22f && local < 0.78f) glow = Mathf.Max(glow, 0.85f);
+                    }
+
+                    // inner five-pointed star matching the pentagonal plan
+                    float star = Mathf.Abs(Mathf.Cos(ang * 2.5f));
+                    glow = Mathf.Max(glow, Band(r, 0.10f + star * 0.30f, 0.009f) * (r > 0.05f ? 1f : 0f));
+
+                    if (r > 1.0f) glow = 0f;
+                    glow *= 0.55f + grain * 0.45f;      // carving wear
+
+                    c = Lerp(c, glowRim, Mathf.Clamp01(glow * 0.9f));
+                    h -= glow * 0.55f;                   // the sigil is cut into the slab
+                    col[y * size + x] = c;
+                    hgt[y * size + x] = h;
+                    if (em != null)
+                    {
+                        float e = Mathf.Clamp01(glow);
+                        em[y * size + x] = Lerp(Color.black, glowCore, e * e);
+                    }
+                }
+        }
+
+        /// <summary>Distance to a ring, as a soft 0..1 mask.</summary>
+        static float Band(float r, float at, float halfWidth)
+        {
+            return Mathf.Clamp01(1f - Mathf.Abs(r - at) / halfWidth);
+        }
+
+        /// <summary>Lapis panel with a gold chevron border - the palace banners and regalia.</summary>
+        static void LapisPanel(int size, Color[] col, float[] hgt, Color[] em)
+        {
+            Color lapis = new Color(0.129f, 0.216f, 0.451f);
+            Color lapisLit = new Color(0.220f, 0.353f, 0.639f);
+            Color gold = new Color(0.855f, 0.667f, 0.290f);
+            Color goldDim = new Color(0.596f, 0.435f, 0.157f);
+
+            for (int y = 0; y < size; y++)
+                for (int x = 0; x < size; x++)
+                {
+                    float u = (x + 0.5f) / size, v = (y + 0.5f) / size;
+                    float grain = Fbm(u, v, 22, 4, 311);
+                    float fleck = Fbm(u, v, 90, 2, 77);
+
+                    // lapis body with pyrite flecking
+                    Color c = Lerp(lapis, lapisLit, grain * 0.8f);
+                    c = Lerp(c, gold, Mathf.Clamp01((fleck - 0.80f) * 4f) * 0.5f);
+                    float h = grain * 0.2f;
+
+                    // gold border framing the panel
+                    float edge = Mathf.Min(Mathf.Min(u, 1f - u), Mathf.Min(v, 1f - v));
+                    // SmoothStep(from, to, t) interpolates between from and to - it does not
+                    // remap edge out of that range, so the bounds go through InverseLerp
+                    float border = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.055f, 0.075f, edge));
+                    float inner = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.020f, 0.032f, edge));
+                    float frame = border * inner;
+
+                    // gold chevrons running up the centre
+                    float chev = Mathf.Abs(((u * 6f) % 1f) - 0.5f) * 2f;
+                    float chevBand = Mathf.Clamp01(1f - Mathf.Abs(chev - (v * 3f % 1f)) * 9f);
+                    chevBand *= (edge > 0.09f) ? 1f : 0f;
+
+                    float g = Mathf.Clamp01(frame + chevBand * 0.75f);
+                    c = Lerp(c, Lerp(goldDim, gold, grain), g);
+                    h += g * 0.5f;
+
+                    col[y * size + x] = c;
+                    hgt[y * size + x] = h;
+                }
+        }
+
+        static void MudBrick(int size, Color[] col, float[] hgt, Color[] em)
         {
             for (int y = 0; y < size; y++)
             {
@@ -392,7 +559,7 @@ namespace Aether.Citadel
         }
 
         /// <summary>Dark boards - doors, shutters, window voids, pitched roofs, tent cloth.</summary>
-        static void Timber(int size, Color[] col, float[] hgt)
+        static void Timber(int size, Color[] col, float[] hgt, Color[] em)
         {
             const int planks = 6;
             float pw = 1f / planks;
@@ -417,7 +584,7 @@ namespace Aether.Citadel
         }
 
         /// <summary>Beaten-earth roof deck and wall walk, with sand collecting in the hollows.</summary>
-        static void RoofDust(int size, Color[] col, float[] hgt)
+        static void RoofDust(int size, Color[] col, float[] hgt, Color[] em)
         {
             for (int y = 0; y < size; y++)
             {
@@ -433,8 +600,10 @@ namespace Aether.Citadel
                     float drift = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.58f, 0.80f, Fbm(u, v, 7, 3, 137)));
                     c = Lerp(c, SandLight * (0.95f + n * 0.1f), drift * 0.65f);
 
-                    float grit = Hash(x, y, 7);
-                    if (grit > 0.985f) c *= 0.62f;
+                    // a per-texel threshold here used to punch isolated near-black
+                    // pixels into the deck, which reads as dither rather than grit
+                    float grit = Fbm(u, v, 64, 2, 7);
+                    c *= 0.95f + grit * 0.1f;
                     c.a = 1f;
                     col[y * size + x] = c;
                     hgt[y * size + x] = n * 0.45f + patch * 0.28f + drift * 0.2f;
@@ -442,10 +611,16 @@ namespace Aether.Citadel
             }
         }
 
-        /// <summary>Desert floor: wind ripples across the prevailing wind, plus pebble scatter.</summary>
-        static void Sand(int size, Color[] col, float[] hgt)
+        /// <summary>
+        /// Open sand: a wandering train of wind ripples, a faint tonal swell and a
+        /// sparse gravel scatter. Almost all the relief lives in the normal map - albedo
+        /// stays close to a single value, which is what makes it read as a smooth drift
+        /// rather than the dense dark speckle it used to be.
+        /// </summary>
+        static void Sand(int size, Color[] col, float[] hgt, Color[] em)
         {
-            const int cells = 42;
+            const int cells = 9;   // one loose stone every few square metres
+
             for (int y = 0; y < size; y++)
             {
                 float v = (y + 0.5f) / size;
@@ -453,29 +628,54 @@ namespace Aether.Citadel
                 {
                     float u = (x + 0.5f) / size;
 
-                    // keep the low frequencies weak: this tiles ~50x across the terrain
-                    // and any large blotch turns into an obvious repeating grid
-                    float dunes = Fbm(u, v, 8, 4, 101);
-                    float grain = Fbm(u, v, 40, 3, 202);
+                    // broad drift shading - the faintest of tonal swells
+                    float broad = Fbm(u, v, 3, 3, 101) - 0.5f;
+                    // ~12 cm blobs. Anything finer than this in the albedo is sub-pixel
+                    // at normal viewing distance and shimmers instead of reading as grain.
+                    float grain = Fbm(u, v, 14, 3, 202) - 0.5f;
 
-                    // ripples: integer harmonics so the pattern still tiles seamlessly
-                    float warp = (Fbm(u, v, 6, 3, 303) - 0.5f) * 0.09f;
-                    float rip = Mathf.Sin((18f * u + 9f * v + warp) * Mathf.PI * 2f);
-                    rip = Mathf.Sign(rip) * Mathf.Pow(Mathf.Abs(rip), 0.65f);
+                    // Wind ripples at ~30 cm, on integer harmonics so the tile still
+                    // wraps. One train dominates and the second runs nearly parallel at
+                    // double the frequency; crossing two trains at a wide angle instead
+                    // weaves a diamond lattice that reads as basketwork, not as sand.
+                    // The warp reaches most of a wavelength, so crests meander and pinch
+                    // off rather than ruling the tile in straight lines.
+                    float warp = (Fbm(u, v, 4, 4, 303) - 0.5f) * 0.7f;
+                    float r1 = Mathf.Sin((13f * u + 23f * v + warp) * Tau);
+                    float r2 = Mathf.Sin((25f * u + 45f * v + warp * 1.8f) * Tau);
+                    float rip = r1 * 0.8f + r2 * 0.2f;
+                    // and they die away altogether over the smoother patches of drift
+                    rip *= 0.25f + Fbm(u, v, 3, 2, 311) * 1.15f;
+                    // an exponent above one gives narrow crests over broad flat troughs,
+                    // the way blown sand actually lies; below one it hard-banded
+                    rip = Mathf.Sign(rip) * Mathf.Pow(Mathf.Abs(rip), 1.5f);
 
-                    Color c = Lerp(SandDark, SandLight, 0.44f + dunes * 0.2f + grain * 0.16f + rip * 0.12f);
-                    float h = dunes * 0.25f + grain * 0.2f + rip * 0.55f;
+                    float tone = 0.5f + broad * 0.34f + rip * 0.15f + grain * 0.16f;
+                    Color c = tone < 0.5f
+                        ? Lerp(SandShade, SandBase, tone * 2f)
+                        : Lerp(SandBase, SandSun, (tone - 0.5f) * 2f);
 
+                    float h = rip * 0.5f + broad * 0.3f + grain * 0.34f;
+
+                    // Loose gravel: sparse, blunt-edged and only a little darker than the
+                    // sand around it. A dense scatter of near-black specks is precisely
+                    // what made the old floor look dithered at any distance.
                     int cx = Mathf.FloorToInt(u * cells), cy = Mathf.FloorToInt(v * cells);
-                    if (Hash(cx, cy, 55) > 0.74f)
+                    if (Hash(cx, cy, 55) > 0.86f)
                     {
-                        float jx = (cx + Hash(cx, cy, 77)) / cells;
-                        float jy = (cy + Hash(cx, cy, 99)) / cells;
-                        float rad = (0.14f + Hash(cx, cy, 123) * 0.26f) / cells;
+                        float jx = (cx + 0.2f + Hash(cx, cy, 77) * 0.6f) / cells;
+                        float jy = (cy + 0.2f + Hash(cx, cy, 99) * 0.6f) / cells;
+                        float rad = (0.07f + Hash(cx, cy, 123) * 0.1f) / cells;
                         float dist = Mathf.Sqrt((u - jx) * (u - jx) + (v - jy) * (v - jy));
-                        float m = 1f - Mathf.SmoothStep(rad * 0.6f, rad, dist);
-                        c = Lerp(c, new Color(0.322f, 0.294f, 0.239f) * (0.7f + Hash(cx, cy, 31) * 0.6f), m);
-                        h = Mathf.Lerp(h, 0.85f, m);
+                        // Mathf.SmoothStep takes the interpolant last, not a value to
+                        // remap. Feeding it the raw distance - as this did - returns ~1
+                        // for every texel in the cell, which filled a quarter of all
+                        // cells solid and laid a grid of dark 19 cm squares across the
+                        // whole desert. That was the pixellation.
+                        float m = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(rad * 0.45f, rad, dist));
+                        Color stone = Lerp(Gravel, SandShade, Hash(cx, cy, 31) * 0.5f);
+                        c = Lerp(c, stone, m * 0.5f);
+                        h = Mathf.Lerp(h, 0.5f, m);
                     }
 
                     c.a = 1f;
@@ -483,6 +683,167 @@ namespace Aether.Citadel
                     hgt[y * size + x] = h;
                 }
             }
+        }
+
+        /// <summary>
+        /// The floor of the town: ancient flagstones, a fifth of them gone back to
+        /// beaten earth, the rest crazed and sunk unevenly with sand filling the joints
+        /// and drowning whole patches. Laid on the same 8 m tile as <see cref="Sand"/>
+        /// and drawn from the same palette, so the two read as one surface where they
+        /// meet under the curtain footing.
+        /// </summary>
+        static void CityFloorTex(int size, Color[] col, float[] hgt, Color[] em)
+        {
+            const int cells = 7;        // ~1.1 m slabs
+            const float joint = 0.11f;  // joint width, relative to a cell
+
+            for (int y = 0; y < size; y++)
+            {
+                float v = (y + 0.5f) / size;
+                for (int x = 0; x < size; x++)
+                {
+                    float u = (x + 0.5f) / size;
+
+                    float dust = Fbm(u, v, 22, 4, 401) - 0.5f;
+                    float wear = Fbm(u, v, 5, 3, 409);        // where the traffic runs
+
+                    // Worley cells give irregular polygonal slabs; the gap between the
+                    // nearest two feature points is the joint, so no two stones match.
+                    int sx, sy;
+                    float f1, f2;
+                    Worley(u, v, cells, 419, out f1, out f2, out sx, out sy);
+                    float edge = (f2 - f1) * cells;
+
+                    float face = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(edge / joint));
+                    // worn round rather than square-arrised, so the joint reads as a
+                    // wide soft hollow in the relief
+                    float bevel = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(edge / (joint * 2.6f)));
+
+                    float slabGrain = Fbm(u, v, 18, 3, 437 + sx * 3 + sy * 7);
+                    float tone = 0.88f + Hash(sx, sy, 443) * 0.2f;
+                    Color slab = Lerp(FlagDark, FlagLight, 0.42f + slabGrain * 0.34f) * tone;
+
+                    // finer and fainter: a heavy network reads as cracked granite
+                    float crack = Mathf.Pow(1f - Mathf.Abs(Fbm(u, v, 11, 4, 449) * 2f - 1f), 30f);
+                    slab = Lerp(slab, slab * 0.87f, Mathf.Clamp01(crack * 1.3f));
+
+                    Color earth = Lerp(EarthPack * 0.88f, EarthPack, 0.35f + dust + wear * 0.4f);
+                    Color filled = Lerp(SandShade, SandBase, 0.4f + dust * 1.2f);
+
+                    Color c;
+                    float h;
+                    if (Hash(sx, sy, 431) > 0.22f)
+                    {
+                        float sink = Hash(sx, sy, 457) * 0.35f;
+                        c = Lerp(filled, slab, face);
+                        h = bevel * (0.62f - sink) + slabGrain * 0.12f - crack * 0.22f;
+                    }
+                    else
+                    {
+                        // the slab has gone - bare packed earth, joints silted level
+                        c = Lerp(earth, filled, face * 0.35f);
+                        h = 0.1f + dust * 0.5f;
+                    }
+
+                    // Blown sand lying over the paving. Held to sub-metre features on
+                    // purpose: a broad drift mask would repeat visibly across the tile,
+                    // so the large drifts are geometry (see Pieces.SandMound) instead.
+                    float drift = Mathf.SmoothStep(0f, 1f,
+                        Mathf.InverseLerp(0.46f, 0.76f, Fbm(u, v, 6, 4, 463)));
+                    Color sand = Lerp(SandBase, SandSun, 0.35f + dust * 1.4f);
+                    c = Lerp(c, sand, drift * 0.85f);
+                    h = Mathf.Lerp(h, 0.42f + dust * 0.35f, drift * 0.75f);
+
+                    // polished pale where the feet and the sun have got at it longest
+                    c = Lerp(c, c * 1.06f, Mathf.Clamp01(wear - 0.55f) * 1.5f);
+
+                    c.a = 1f;
+                    col[y * size + x] = c;
+                    hgt[y * size + x] = h;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Tileable Worley cells. <paramref name="f1"/> and <paramref name="f2"/> come
+        /// back as the distances to the nearest and next-nearest feature point - their
+        /// difference draws a clean joint between irregular slabs - along with the id of
+        /// the cell owning the texel, so a stone can be tinted and sunk as a unit.
+        /// </summary>
+        static void Worley(float u, float v, int cells, int seed,
+                           out float f1, out float f2, out int ownerX, out int ownerY)
+        {
+            int gx = Mathf.FloorToInt(u * cells), gy = Mathf.FloorToInt(v * cells);
+            f1 = f2 = 4f;
+            ownerX = gx; ownerY = gy;
+
+            for (int j = -1; j <= 1; j++)
+                for (int i = -1; i <= 1; i++)
+                {
+                    int nx = gx + i, ny = gy + j;
+                    // the site is offset from the unwrapped cell but seeded from the
+                    // wrapped one, which is what keeps the pattern seamless
+                    int wx = Wrap(nx, cells), wy = Wrap(ny, cells);
+                    float px = (nx + 0.18f + Hash(wx, wy, seed) * 0.64f) / cells;
+                    float py = (ny + 0.18f + Hash(wx, wy, seed + 37) * 0.64f) / cells;
+                    float dx = u - px, dy = v - py;
+                    float d = Mathf.Sqrt(dx * dx + dy * dy);
+                    if (d < f1) { f2 = f1; f1 = d; ownerX = wx; ownerY = wy; }
+                    else if (d < f2) f2 = d;
+                }
+        }
+
+        /// <summary>
+        /// Fine grain shared by both floor materials, wired into URP's detail slot at
+        /// <paramref name="repeats"/> tiles per base tile. The base maps hold nothing
+        /// smaller than about 10 cm, so this is what keeps the ground from going smooth
+        /// and plasticky underfoot; being centred on neutral grey, it fades out through
+        /// the mip chain instead of shimmering off into the distance.
+        /// </summary>
+        static void AttachGroundDetail(string texDir, Material mat, bool regenerate, float repeats)
+        {
+            if (mat == null || !mat.HasProperty("_DetailAlbedoMap")) return;
+
+            const int size = 512;
+            string albedoPath = texDir + "/T_GroundDetail_Albedo.png";
+            string normalPath = texDir + "/T_GroundDetail_Normal.png";
+
+            if (regenerate || !File.Exists(albedoPath))
+            {
+                var albedo = new Color[size * size];
+                var height = new float[size * size];
+                for (int y = 0; y < size; y++)
+                {
+                    float v = (y + 0.5f) / size;
+                    for (int x = 0; x < size; x++)
+                    {
+                        float u = (x + 0.5f) / size;
+                        float grit = Fbm(u, v, 40, 4, 601) - 0.5f;
+                        float micro = Mathf.Sin((23f * u + 11f * v) * Tau) * 0.5f
+                                    + Mathf.Sin((9f * u - 19f * v) * Tau) * 0.3f;
+                        // mid grey is the neutral value for a multiply-by-two detail map
+                        float t = 0.5f + grit * 0.14f + micro * 0.035f;
+                        albedo[y * size + x] = new Color(t, t * 0.995f, t * 0.985f, 1f);
+                        height[y * size + x] = grit * 0.7f + micro * 0.5f;
+                    }
+                }
+                WritePng(albedoPath, size, albedo, false);
+                WritePng(normalPath, size, NormalFromHeight(size, height, 1.6f), true);
+                AssetDatabase.ImportAsset(albedoPath, ImportAssetOptions.ForceUpdate);
+                AssetDatabase.ImportAsset(normalPath, ImportAssetOptions.ForceUpdate);
+                Configure(albedoPath, false, size, FilterMode.Trilinear, 16);
+                Configure(normalPath, true, size, FilterMode.Trilinear, 16);
+            }
+
+            SetTex(mat, "_DetailAlbedoMap", AssetDatabase.LoadAssetAtPath<Texture2D>(albedoPath));
+            SetTex(mat, "_DetailNormalMap", AssetDatabase.LoadAssetAtPath<Texture2D>(normalPath));
+            mat.SetTextureScale("_DetailAlbedoMap", new Vector2(repeats, repeats));
+            // the scale stays at 1: the deviation is baked into the sheet, and a value
+            // off 1 sends URP down its _DETAIL_SCALED variant instead
+            if (mat.HasProperty("_DetailAlbedoMapScale")) mat.SetFloat("_DetailAlbedoMapScale", 1f);
+            if (mat.HasProperty("_DetailNormalMapScale")) mat.SetFloat("_DetailNormalMapScale", 0.9f);
+            mat.EnableKeyword("_DETAIL_MULX2");
+            EditorUtility.SetDirty(mat);
         }
     }
 }

@@ -35,9 +35,28 @@ namespace Aether.Citadel
             CitadelBuilder.BuildCity(seed, true, false, true, false, true, storm);
 
             string stem = Path.ChangeExtension(outPath, null);
-            Orbit(outPath, 1920, 1080, 30f, 8f, 400f, new Vector3(0f, 6f, -6f), true);
-            Orbit(stem + "_close.png", 1600, 900, 17f, 128f, 150f, new Vector3(10f, 8f, -10f), true);
-            Orbit(stem + "_ground.png", 1600, 900, 3.5f, -35f, 118f, new Vector3(-30f, 9f, -60f), true);
+            Orbit(outPath, 1920, 1080, 29f, 8f, 580f, new Vector3(0f, 6f, -10f), true);
+            Orbit(stem + "_close.png", 1600, 900, 17f, 128f, 215f, new Vector3(15f, 10f, -15f), true);
+            Orbit(stem + "_ground.png", 1600, 900, 3.5f, -35f, 150f, new Vector3(-50f, 9f, -80f), true);
+
+            // the processional axis: standing at the great gate, palace dead ahead
+            Orbit(stem + "_gate.png", 1600, 900, 8f, 0f, 66f,
+                  new Vector3(CitadelLayout.AxisX, 11f, -116f), true);
+            Orbit(stem + "_approach.png", 1600, 900, 7f, 0f, 86f,
+                  new Vector3(CitadelLayout.AxisX, 10f, -74f), true);
+
+            // the palace: approach shot, then inside with the roof lifted off
+            Vector3 pc = CitadelLayout.PalaceCentre;
+            Orbit(stem + "_palace.png", 1600, 900, 12f, 3f, 118f, pc + new Vector3(0f, 12f, 0f), true);
+            // tight on a guardian colossus, to check the figure actually reads
+            Orbit(stem + "_statue.png", 1200, 1200, 6f, 14f, 21f,
+                  pc + new Vector3(-11.5f, 8f, -30.0f), true);
+
+            var roofGo = GameObject.Find("Palace_Roof");
+            if (roofGo != null) roofGo.SetActive(false);
+            Orbit(stem + "_palace_in.png", 1600, 900, 33f, 22f, 76f, pc + new Vector3(0f, 6f, 0f), true);
+            Orbit(stem + "_palace_floor.png", 1600, 900, 6f, -4f, 42f, pc + new Vector3(0f, 4.5f, 0f), true);
+            if (roofGo != null) roofGo.SetActive(true);
 
             // and the same ground view with the storm cranked up, to check the heavy end
             CitadelEnvironment.Build(CitadelBuilder.Root, 0.9f, true, false);
@@ -114,6 +133,8 @@ namespace Aether.Citadel
             tex.Apply();
             RenderTexture.active = prev;
 
+            string dir = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             File.WriteAllBytes(path, tex.EncodeToPNG());
 
             cam.targetTexture = null;

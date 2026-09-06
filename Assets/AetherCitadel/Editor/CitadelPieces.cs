@@ -103,6 +103,134 @@ namespace Aether.Citadel
         }
 
         /// <summary>Gate section: same profile as a curtain wall, pierced by an arched opening.</summary>
+        /// <summary>
+        /// Monumental gatehouse. Same arched passage as <see cref="GateWall"/>, but
+        /// dressed with battered pylons, a cavetto lintel, banners and braziers, and
+        /// left OPEN - the leaves are folded flat against the inner face - so the
+        /// processional way runs through it unbroken and vehicles can drive in.
+        /// </summary>
+        /// <summary>Stone brazier with glowing embers. Shared by the palace and the gates.</summary>
+        public static void Brazier(MeshBuilder mb, Vector3 pos, float h)
+        {
+            mb.Use(Mat.StoneBlock);
+            mb.Box(pos, new Vector3(1.5f, 0.24f, 1.5f), CK.D);
+            mb.Cylinder(pos + Vector3.up * 0.24f, 0.58f, 0.46f, h * 0.55f, 10, CK.D, false);
+            mb.Cylinder(pos + Vector3.up * (h * 0.55f), 0.52f, 0.86f, h * 0.32f, 12, CK.D, false);
+            EmberDisc(mb, pos + Vector3.up * (h * 0.86f), 0.78f);
+        }
+
+        /// <summary>
+        /// Small upward disc sampling only the middle of the rune sigil texture, so a
+        /// brazier reads as a glow rather than a shrunken copy of the arena floor.
+        /// </summary>
+        public static void EmberDisc(MeshBuilder mb, Vector3 c, float radius)
+        {
+            mb.Use(Mat.Rune);
+            const int sides = 12;
+            const float half = 0.11f;
+            Vector2 uc = new Vector2(0.5f, 0.5f);
+            for (int i = 0; i < sides; i++)
+            {
+                float a0 = Mathf.PI * 2f * i / sides, a1 = Mathf.PI * 2f * (i + 1) / sides;
+                Vector3 p0 = c + new Vector3(Mathf.Cos(a0) * radius, 0f, Mathf.Sin(a0) * radius);
+                Vector3 p1 = c + new Vector3(Mathf.Cos(a1) * radius, 0f, Mathf.Sin(a1) * radius);
+                mb.Tri(c, p0, p1, uc,
+                       new Vector2(0.5f + Mathf.Cos(a0) * half, 0.5f + Mathf.Sin(a0) * half),
+                       new Vector2(0.5f + Mathf.Cos(a1) * half, 0.5f + Mathf.Sin(a1) * half));
+            }
+        }
+
+        public static void GreatGate(MeshBuilder mb, Vector3 a, Vector3 b, WallSpec s, float openW, float openH)
+        {
+            Vector3 d = b - a; d.y = 0f;
+            float len = d.magnitude;
+            if (len < 0.05f) return;
+            d /= len;
+
+            mb.Push(new Vector3(a.x, 0f, a.z), YawFor(d));
+
+            float xc = len * 0.5f;
+            float r = openW * 0.5f;
+            float xL = xc - r, xR = xc + r;
+            float half = s.thickness * 0.5f;
+
+            WallSpan(mb, 0f, xL, -CK.Sink, s.height, s, true);
+            WallSpan(mb, xR, len, -CK.Sink, s.height, s, true);
+
+            const int steps = 22;
+            for (int i = 0; i < steps; i++)
+            {
+                float t0 = (float)i / steps, t1 = (float)(i + 1) / steps;
+                float x0 = xL + openW * t0, x1 = xL + openW * t1;
+                float xm = (x0 + x1) * 0.5f;
+                float dx = Mathf.Clamp((xm - xc) / r, -1f, 1f);
+                float y = openH + Mathf.Sqrt(Mathf.Max(0f, 1f - dx * dx)) * r;
+                WallSpan(mb, x0, x1, y, s.height, s, false);
+            }
+
+            WallCrown(mb, len, s);
+
+            float archTop = openH + r;
+            float pylonW = 7.0f, pylonD = 5.4f, pylonH = s.height + 5.5f;
+
+            // local +Z is inward (the wall's outward normal is Cross(up, dir))
+            foreach (float side in new[] { -1f, 1f })
+            {
+                float x = xc + side * (r + pylonW * 0.5f + 0.6f);
+                foreach (float face in new[] { -1f, 1f })
+                {
+                    float z = face * (half + pylonD * 0.5f - 1.1f);
+                    mb.Use(Mat.StoneBlock);
+                    mb.TaperedBox(new Vector3(x, -CK.Sink, z), Vector3.right, Vector3.forward,
+                                  new Vector2(pylonW, pylonD),
+                                  new Vector2(pylonW * 0.8f, pylonD * 0.8f),
+                                  pylonH + CK.Sink, CK.D, false);
+                    mb.Box(new Vector3(x, pylonH, z), new Vector3(pylonW * 1.14f, 1.3f, pylonD * 1.14f), CK.D);
+
+                    // banner down the outward face of each pylon
+                    mb.Use(Mat.Lapis);
+                    float bz = z + face * (pylonD * 0.5f - 0.35f);
+                    mb.Quad(new Vector3(x - 1.5f, 2.5f, bz), new Vector3(x + 1.5f, 2.5f, bz),
+                            new Vector3(x + 1.5f, pylonH - 2f, bz), new Vector3(x - 1.5f, pylonH - 2f, bz),
+                            new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(0f, 1f));
+
+                    Brazier(mb, new Vector3(x + side * -pylonW * 0.28f, 0f, z + face * (pylonD * 0.5f + 1.6f)), 3.0f);
+                }
+            }
+
+            // cavetto lintel spanning the arch, tying the two pylons together
+            mb.Use(Mat.StoneBlock);
+            float lintelY = archTop + 1.0f;
+            mb.Box(new Vector3(xc, lintelY, 0f),
+                   new Vector3(openW + pylonW * 2f + 1.4f, 2.4f, s.thickness + 3.4f), CK.D);
+            mb.Use(Mat.Lapis);
+            foreach (float face in new[] { -1f, 1f })
+            {
+                float z = face * (half + 1.72f);
+                mb.Quad(new Vector3(xc - openW * 0.5f, lintelY + 0.35f, z),
+                        new Vector3(xc + openW * 0.5f, lintelY + 0.35f, z),
+                        new Vector3(xc + openW * 0.5f, lintelY + 1.95f, z),
+                        new Vector3(xc - openW * 0.5f, lintelY + 1.95f, z),
+                        new Vector2(0f, 0f), new Vector2(3f, 0f), new Vector2(3f, 1f), new Vector2(0f, 1f));
+            }
+
+            // leaves folded back flat against the inner face - the way stays clear
+            mb.Use(Mat.Wood);
+            float leafW = openW * 0.46f, leafH = archTop * 0.88f;
+            foreach (float side in new[] { -1f, 1f })
+            {
+                float x = xc + side * (r + leafW * 0.5f + 0.2f);
+                mb.Box(new Vector3(x, -CK.Sink, half + 0.3f),
+                       new Vector3(leafW, leafH + CK.Sink, 0.45f), CK.D);
+            }
+
+            // paved threshold so the road runs through without a lip
+            mb.Use(Mat.CityFloor);
+            mb.Box(new Vector3(xc, -0.02f, 0f), new Vector3(openW + 1.6f, 0.2f, s.thickness + 16f), CK.D);
+
+            mb.Pop();
+        }
+
         public static void GateWall(MeshBuilder mb, Vector3 a, Vector3 b, WallSpec s, float openW, float openH)
         {
             Vector3 d = b - a; d.y = 0f;
@@ -851,6 +979,94 @@ namespace Aether.Citadel
                     new Vector2(top[j].x, top[j].z) * CK.D * 2f);
             }
             mb.Pop();
+        }
+
+        // ---- town floor -----------------------------------------------------
+
+        /// <summary>
+        /// The floor the town stands on. The pan inside the curtain is dead flat in the
+        /// dune mesh, which reads as a poured slab, so this lays an ancient street
+        /// surface over it - flagstones, beaten earth and drifted sand - worn into
+        /// shallow hollows a few centimetres deep so the light breaks across it.
+        /// Filled radially out from the middle of <paramref name="ring"/> so the outline
+        /// follows the wall exactly and its edge dies under the curtain footing instead
+        /// of ending in a visible step. Requires a convex ring, which the wall trace is.
+        /// Shared vertices and analytic normals, as with <see cref="Dunes"/>.
+        /// </summary>
+        public static void CityPan(MeshBuilder mb, System.Collections.Generic.IList<Vector3> ring,
+                                   int spokes, int rings, int seed)
+        {
+            mb.Use(Mat.CityFloor);
+
+            Vector3 mid = Vector3.zero;
+            for (int i = 0; i < ring.Count; i++) mid += ring[i];
+            mid /= ring.Count;
+            mid.y = 0f;
+
+            Vector2 off = DuneOffset(seed);
+            // Always positive: the pan underneath sits at y = 0, and a hollow that dips
+            // below it would z-fight with the dune mesh across the whole town.
+            System.Func<float, float, float> h = (x, z) =>
+                0.1f + Fbm((x + off.x) * 0.055f, (z + off.y) * 0.055f) * 0.055f
+                     + Fbm((x + off.x) * 0.21f, (z + off.y) * 0.21f) * 0.02f;
+
+            int n = rings + 1;
+            var idx = new int[spokes * n];
+            int centre = mb.Vertex(new Vector3(mid.x, h(mid.x, mid.z), mid.z), Vector3.up,
+                                   new Vector2(mid.x, mid.z) * CK.D * 0.5f);
+
+            for (int s = 0; s < spokes; s++)
+            {
+                float a = Mathf.PI * 2f * s / spokes;
+                var dir = new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a));
+                float reach = RayToEdge(mid, dir, ring);
+                for (int k = 1; k <= rings; k++)
+                {
+                    float t = (float)k / rings;
+                    float x = mid.x + dir.x * reach * t, z = mid.z + dir.z * reach * t;
+                    float e = 0.35f;
+                    float dx = h(x + e, z) - h(x - e, z);
+                    float dz = h(x, z + e) - h(x, z - e);
+                    var nrm = new Vector3(-dx, 2f * e, -dz).normalized;
+                    idx[s * n + k] = mb.Vertex(new Vector3(x, h(x, z), z), nrm,
+                                               new Vector2(x, z) * CK.D * 0.5f);
+                }
+            }
+
+            for (int s = 0; s < spokes; s++)
+            {
+                int s2 = (s + 1) % spokes;
+                mb.Triangle(centre, idx[s * n + 1], idx[s2 * n + 1]);
+                for (int k = 1; k < rings; k++)
+                {
+                    int a0 = idx[s * n + k], b0 = idx[s * n + k + 1];
+                    int b1 = idx[s2 * n + k + 1], a1 = idx[s2 * n + k];
+                    mb.Triangle(a0, b0, b1);
+                    mb.Triangle(a0, b1, a1);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Distance from an interior point out to the polygon boundary along
+        /// <paramref name="dir"/>, in the xz plane. One edge answers for a convex
+        /// polygon; the max guards against a near-parallel grazing hit.
+        /// </summary>
+        static float RayToEdge(Vector3 origin, Vector3 dir, System.Collections.Generic.IList<Vector3> poly)
+        {
+            float best = 0f;
+            for (int i = 0; i < poly.Count; i++)
+            {
+                Vector3 a = poly[i], b = poly[(i + 1) % poly.Count];
+                float ex = b.x - a.x, ez = b.z - a.z;
+                float den = dir.x * ez - dir.z * ex;
+                if (Mathf.Abs(den) < 1e-6f) continue;
+                float ox = a.x - origin.x, oz = a.z - origin.z;
+                float t = (ox * ez - oz * ex) / den;        // along dir
+                float s = (ox * dir.z - oz * dir.x) / den;  // along the edge
+                if (t > 0f && s > -0.001f && s < 1.001f && t > best) best = t;
+            }
+            return best;
         }
 
         // ---- noise ----------------------------------------------------------
