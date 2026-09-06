@@ -1,0 +1,46 @@
+# Normalise line endings for text, and keep Unity's YAML assets diffable.
+* text=auto
+
+*.cs        text diff=csharp
+*.shader    text
+*.cginc     text
+*.hlsl      text
+*.md        text
+*.json      text
+*.asmdef    text
+*.uxml      text
+*.uss       text
+
+# Unity serialises these as YAML when Asset Serialization is Force Text.
+*.unity     text
+*.prefab    text
+*.asset     text
+*.mat       text
+*.meta      text
+*.controller text
+*.anim      text
+*.physicMaterial text
+*.lighting  text
+
+# Binary - never diff or merge these
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.tga       binary
+*.psd       binary
+*.exr       binary
+*.hdr       binary
+*.fbx       binary
+*.FBX       binary
+*.obj       binary
+*.blend     binary
+*.wav       binary
+*.mp3       binary
+*.ogg       binary
+*.ttf       binary
+*.otf       binary
+*.dll       binary
+*.so        binary
+*.a         binary
+*.pdb       binary
+*.cubemap   binary
